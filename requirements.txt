@@ -1,0 +1,9 @@
+telethon>=1.36.0
+uvloop>=0.19.0; sys_platform != "win32"
+tgcrypto>=1.2.5
+aiosqlite>=0.20.0
+pydantic>=2.7.0
+pydantic-settings>=2.2.0
+python-dotenv>=1.0.0
+pytest>=8.0.0
+pytest-asyncio>=0.23.0
