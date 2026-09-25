@@ -17,31 +17,25 @@ class FloorEngine:
     """
 
     @staticmethod
-    def calculate_trimmed_moving_average(prices: List[float], trim_ratio: float = 0.1) -> float:
+    def calculate_cheapest_three_average(prices: List[float]) -> float:
         """
-        Calculates Trimmed Moving Average to remove extreme outliers and wash trading prices.
-        If fewer than 3 prices are available, returns average of available prices.
+        Calculates the floor price as the average of the 3 cheapest items in the market.
+        Example: [637, 646, 649] -> (637 + 646 + 649) / 3 = 644.0
         """
-        if not prices:
+        valid_prices = [p for p in prices if p > 0]
+        if not valid_prices:
             return 0.0
 
-        sorted_prices = sorted(prices)
-        n = len(sorted_prices)
+        sorted_prices = sorted(valid_prices)
+        cheapest_3 = sorted_prices[:3]
+        return float(sum(cheapest_3)) / float(len(cheapest_3))
 
-        if n <= 3:
-            # Average of up to 3 lowest prices as specified in PDF section 2:
-            # "General floor = average of 3 cheapest items"
-            return sum(sorted_prices[:n]) / float(n)
-
-        k = int(n * trim_ratio)
-        if k > 0 and (n - 2 * k) > 0:
-            trimmed = sorted_prices[k: n - k]
-        else:
-            trimmed = sorted_prices
-
-        # Take average of the lowest 3 prices from trimmed set
-        cheapest_3 = trimmed[:3]
-        return sum(cheapest_3) / float(len(cheapest_3))
+    @staticmethod
+    def calculate_trimmed_moving_average(prices: List[float], trim_ratio: float = 0.1) -> float:
+        """
+        Maintained for backward compatibility. Uses the 3 cheapest items average rule requested by user.
+        """
+        return FloorEngine.calculate_cheapest_three_average(prices)
 
     @staticmethod
     def calculate_reference_floor(
@@ -155,3 +149,50 @@ class MemoryHotCache:
             bg_floor = col_data["backgrounds"][background]
 
         return FloorEngine.calculate_reference_floor(gen_floor, model_floor, bg_floor)
+
+    async def update_floors_from_listings(
+        self,
+        collectible_id: str,
+        listings: List[Any],
+        persist_to_db: bool = True
+    ):
+        """
+        Dynamically calculates and updates general, model, and background floors
+        from market listings using average of 3 cheapest items algorithm.
+        """
+        general_prices: List[float] = []
+        model_prices: Dict[str, List[float]] = {}
+        bg_prices: Dict[str, List[float]] = {}
+
+        for item in listings:
+            price = getattr(item, "price_stars", None) if not isinstance(item, dict) else item.get("price_stars")
+            model = getattr(item, "model", None) if not isinstance(item, dict) else item.get("model")
+            bg = getattr(item, "background", None) if not isinstance(item, dict) else item.get("background")
+
+            if price and price > 0:
+                general_prices.append(float(price))
+                if model:
+                    model_prices.setdefault(model, []).append(float(price))
+                if bg:
+                    bg_prices.setdefault(bg, []).append(float(price))
+
+        gen_floor = FloorEngine.calculate_cheapest_three_average(general_prices)
+        computed_models = {m: FloorEngine.calculate_cheapest_three_average(p) for m, p in model_prices.items()}
+        computed_bgs = {b: FloorEngine.calculate_cheapest_three_average(p) for b, p in bg_prices.items()}
+
+        self.set_floors(
+            collectible_id=collectible_id,
+            general_floor=gen_floor,
+            model_floors=computed_models,
+            bg_floors=computed_bgs
+        )
+
+        if persist_to_db and self.db_repo:
+            if gen_floor > 0:
+                await self.db_repo.upsert_general_floor(collectible_id, gen_floor)
+            for m_name, m_floor in computed_models.items():
+                if m_floor > 0:
+                    await self.db_repo.upsert_model_floor(collectible_id, m_name, m_floor)
+            for b_name, b_floor in computed_bgs.items():
+                if b_floor > 0:
+                    await self.db_repo.upsert_background_floor(collectible_id, b_name, b_floor)

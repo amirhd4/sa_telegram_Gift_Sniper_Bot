@@ -57,13 +57,17 @@ class MarketScanner:
         cache: MemoryHotCache,
         db_repo: DatabaseRepository,
         discount_threshold: float = 0.20,
+        alert_discount_threshold: float = 0.25,
+        snipe_discount_threshold: float = 0.50,
         max_stars_cap: Optional[int] = None,
         on_deal_found_callback: Optional[Callable] = None
     ):
         self.client = client
         self.cache = cache
         self.db_repo = db_repo
-        self.discount_threshold = discount_threshold
+        self.alert_discount_threshold = alert_discount_threshold
+        self.snipe_discount_threshold = snipe_discount_threshold
+        self.discount_threshold = min(alert_discount_threshold, snipe_discount_threshold)
         self.max_stars_cap = max_stars_cap
         self.on_deal_found_callback = on_deal_found_callback
         self.is_running = False
@@ -133,6 +137,24 @@ class MarketScanner:
 
         return listings
 
+    async def process_listings(self, listings: List[GiftListing]):
+        """
+        Groups listings by collectible, updates floor prices dynamically in cache & DB,
+        and evaluates each listing for deal triggers.
+        """
+        if not listings:
+            return
+
+        collectibles_map: Dict[str, List[GiftListing]] = {}
+        for listing in listings:
+            collectibles_map.setdefault(listing.collectible_name, []).append(listing)
+
+        for col_name, col_listings in collectibles_map.items():
+            await self.cache.update_floors_from_listings(col_name, col_listings, persist_to_db=True)
+
+        for listing in listings:
+            await self.evaluate_listing(listing)
+
     async def evaluate_listing(self, listing: GiftListing):
         """
         Evaluates a single parsed listing in <1ms against the hot cache.
@@ -144,16 +166,17 @@ class MarketScanner:
             background=listing.background
         )
 
+        min_threshold = min(self.alert_discount_threshold, self.snipe_discount_threshold)
         is_buy_signal, discount_pct, reason = FloorEngine.evaluate_deal(
             listed_price=listing.price_stars,
             ref_floor=ref_floor,
-            discount_threshold=self.discount_threshold,
+            discount_threshold=min_threshold,
             max_stars_cap=self.max_stars_cap
         )
 
         logger.info(
             f"Evaluated {listing.slug} | Price: {listing.price_stars} | Ref Floor: {ref_floor} | "
-            f"Discount: {discount_pct:.1%} | Buy Signal: {is_buy_signal}"
+            f"Discount: {discount_pct:.1%} | Signal Triggered: {is_buy_signal}"
         )
 
         if is_buy_signal and self.on_deal_found_callback:
@@ -171,8 +194,7 @@ class MarketScanner:
         while self.is_running:
             try:
                 listings = await self.fetch_resale_listings()
-                for listing in listings:
-                    await self.evaluate_listing(listing)
+                await self.process_listings(listings)
 
                 await asyncio.sleep(poll_interval)
             except asyncio.CancelledError:

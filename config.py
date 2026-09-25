@@ -26,7 +26,9 @@ class Settings(BaseSettings):
     ALERT_CHANNEL_ID: Optional[int] = None  # e.g., -1001234567890
 
     # Valuation & Sniper Thresholds
-    DISCOUNT_THRESHOLD: float = 0.20  # Minimum 20% discount below reference floor price to trigger buy
+    ALERT_DISCOUNT_THRESHOLD: float = 0.25  # Minimum 25% discount below floor to post to channel
+    SNIPE_DISCOUNT_THRESHOLD: float = 0.50  # Minimum 50% discount below floor for auto-buyer snipe
+    DISCOUNT_THRESHOLD: float = 0.20       # Legacy fallback threshold
     MAX_STARS_PER_GIFT: int = 100000   # Safety budget guard per single gift transaction
     DAILY_STARS_BUDGET: int = 500000   # Max total stars allowed to spend per day
     HIDE_NAME: bool = True             # Hide buyer's Telegram name on gift purchase

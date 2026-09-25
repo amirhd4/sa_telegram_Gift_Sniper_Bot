@@ -101,30 +101,39 @@ async def main():
 
     # 6. Define Deal Trigger Handler
     async def handle_deal_found(listing: GiftListing, ref_floor: float, discount_pct: float):
-        logger.info(f"🔥 DEAL FOUND: {listing} | Ref Floor: {ref_floor} | Discount: {discount_pct:.1%}")
+        logger.info(f"🔥 DEAL SIGNAL DETECTED: {listing} | Ref Floor: {ref_floor} | Discount: {discount_pct:.1%}")
 
-        # Action A: Send Channel Alert
-        await alert_bot.send_deal_alert(
-            gift_id=listing.gift_id,
-            collectible_name=listing.collectible_name,
-            model=listing.model,
-            background=listing.background,
-            listed_price=listing.price_stars,
-            ref_floor=ref_floor,
-            discount_pct=discount_pct,
-            gift_slug=listing.slug
-        )
+        # Action A: Send Channel Alert if discount meets/exceeds ALERT_DISCOUNT_THRESHOLD (>= 25%)
+        if discount_pct >= settings.ALERT_DISCOUNT_THRESHOLD:
+            logger.info(f"📢 Sending Channel Alert ({discount_pct:.1%} >= {settings.ALERT_DISCOUNT_THRESHOLD:.1%})")
+            await alert_bot.send_deal_alert(
+                gift_id=listing.gift_id,
+                collectible_name=listing.collectible_name,
+                model=listing.model,
+                background=listing.background,
+                listed_price=listing.price_stars,
+                ref_floor=ref_floor,
+                discount_pct=discount_pct,
+                gift_slug=listing.slug
+            )
+        else:
+            logger.info(f"ℹ️ Skipped Channel Alert ({discount_pct:.1%} < {settings.ALERT_DISCOUNT_THRESHOLD:.1%})")
 
-        # Action B: Execute Auto Snipe Buy if in buyer/all mode
-        if args.mode in ("buyer", "all"):
-            await auto_buyer.buy_gift(listing, ref_floor, discount_pct)
+        # Action B: Execute Auto Snipe Buy if in buyer/all mode and discount meets/exceeds SNIPE_DISCOUNT_THRESHOLD (>= 50%)
+        if discount_pct >= settings.SNIPE_DISCOUNT_THRESHOLD:
+            if args.mode in ("buyer", "all"):
+                logger.info(f"⚡ Executing Auto-Snipe ({discount_pct:.1%} >= {settings.SNIPE_DISCOUNT_THRESHOLD:.1%})")
+                await auto_buyer.buy_gift(listing, ref_floor, discount_pct)
+        else:
+            logger.info(f"ℹ️ Skipped Auto-Snipe ({discount_pct:.1%} < {settings.SNIPE_DISCOUNT_THRESHOLD:.1%})")
 
     # 7. Initialize Market Scanner
     scanner = MarketScanner(
         client=scanner_client,
         cache=cache,
         db_repo=db_repo,
-        discount_threshold=settings.DISCOUNT_THRESHOLD,
+        alert_discount_threshold=settings.ALERT_DISCOUNT_THRESHOLD,
+        snipe_discount_threshold=settings.SNIPE_DISCOUNT_THRESHOLD,
         max_stars_cap=settings.MAX_STARS_PER_GIFT,
         on_deal_found_callback=handle_deal_found
     )
