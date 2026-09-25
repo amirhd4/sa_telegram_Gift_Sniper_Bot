@@ -5,20 +5,37 @@ import pytest
 from floor_engine import FloorEngine, MemoryHotCache
 
 
-def test_trimmed_moving_average():
+def test_cheapest_three_average():
     # Test case 1: Empty list
-    assert FloorEngine.calculate_trimmed_moving_average([]) == 0.0
+    assert FloorEngine.calculate_cheapest_three_average([]) == 0.0
 
-    # Test case 2: Few items (< 3)
-    assert FloorEngine.calculate_trimmed_moving_average([100.0, 200.0]) == 150.0
+    # Test case 2: Fewer than 3 items
+    assert FloorEngine.calculate_cheapest_three_average([100.0, 200.0]) == 150.0
 
-    # Test case 3: 3 items (Average of 3 lowest)
-    assert FloorEngine.calculate_trimmed_moving_average([600.0, 630.0, 660.0]) == 630.0
+    # Test case 3: Customer example (637 + 646 + 649 = 1932 / 3 = 644)
+    assert FloorEngine.calculate_cheapest_three_average([637.0, 646.0, 649.0]) == 644.0
 
-    # Test case 4: Extreme outliers removed with trim ratio
-    prices = [500.0, 600.0, 620.0, 640.0, 10000.0]  # Outlier 10000 wash trade
-    tma = FloorEngine.calculate_trimmed_moving_average(prices, trim_ratio=0.1)
-    assert tma < 1000.0
+    # Test case 4: More than 3 items (takes 3 cheapest: 400, 500, 600 -> average 500)
+    assert FloorEngine.calculate_cheapest_three_average([600.0, 400.0, 500.0, 1000.0, 5000.0]) == 500.0
+
+
+@pytest.mark.asyncio
+async def test_update_floors_from_listings():
+    cache = MemoryHotCache()
+    mock_listings = [
+        {"price_stars": 637, "model": "Star Pulip", "background": "Black"},
+        {"price_stars": 646, "model": "Star Pulip", "background": "Black"},
+        {"price_stars": 649, "model": "Star Pulip", "background": "Black"},
+        {"price_stars": 1000, "model": "Star Pulip", "background": "Onyx"},
+    ]
+
+    await cache.update_floors_from_listings("MoodPack", mock_listings, persist_to_db=False)
+
+    # General floor = 644.0
+    assert cache.get_reference_floor("MoodPack") == 644.0
+
+    # Model Star Pulip floor = 644.0
+    assert cache.get_reference_floor("MoodPack", model="Star Pulip") == 644.0
 
 
 def test_reference_floor_calculation():
