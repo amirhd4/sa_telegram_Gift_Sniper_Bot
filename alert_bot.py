@@ -31,7 +31,7 @@ class AlertChannelBot:
         gift_slug: Optional[str] = None
     ):
         if not self.channel_id:
-            logger.warning("No ALERT_CHANNEL_ID configured. Alert skipped.")
+            logger.warning("[ALERT_BOT] No ALERT_CHANNEL_ID configured in settings. Channel alert skipped.")
             return
 
         # Direct Telegram NFT Gift link format e.g., https://t.me/nft/MoodPack-182609
@@ -54,6 +54,6 @@ class AlertChannelBot:
                 message=message,
                 link_preview=False
             )
-            logger.info(f"Alert sent to channel {self.channel_id} for gift {gift_id}")
+            logger.info(f"[ALERT_BOT] 📢 Deal alert successfully sent to channel {self.channel_id} for gift {gift_id} (Slug: {gift_slug})")
         except Exception as e:
-            logger.error(f"Failed to send deal alert to channel: {e}")
+            logger.error(f"[ALERT_BOT] ❌ Failed to send deal alert to channel {self.channel_id}: {e}")
