@@ -150,10 +150,14 @@ async def main():
         on_deal_found_callback=handle_deal_found
     )
 
-    # 8. Start Services
+    # 8. Start Services with client.start() for interactive authorization
     try:
-        await scanner_client.connect()
-        await buyer_client.connect()
+        logger.info("[MAIN] Starting Scanner Telegram Client authorization flow...")
+        await scanner_client.start()
+
+        if args.mode in ("buyer", "all"):
+            logger.info("[MAIN] Starting Buyer Telegram Client authorization flow...")
+            await buyer_client.start()
 
         logger.info(f"[MAIN] Bot running in '{args.mode}' mode. Press Ctrl+C to stop.")
         await scanner.start_polling(poll_interval=settings.POLL_INTERVAL_SECONDS)
