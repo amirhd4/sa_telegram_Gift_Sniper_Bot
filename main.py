@@ -41,14 +41,9 @@ logger = logging.getLogger("GiftSniperMain")
 
 async def seed_example_data(db_repo: DatabaseRepository, cache: MemoryHotCache):
     """Seeds initial reference floors as described in conversation and PDF doc."""
-    logger.info("Seeding initial reference floor prices into Database & Hot Cache...")
+    logger.info("[MAIN] Seeding initial reference floor prices into Database & Hot Cache...")
 
     # MoodPack collectible example from chat & PDF:
-    # General floor: 630 stars
-    # Model Bank Vault floor: 1200 stars
-    # Model Star Pupil floor: 1300 stars
-    # Background Black floor: 3100 stars
-    # Background Onyx Black floor: 1000 stars
     col_id = "MoodPack"
     await db_repo.upsert_general_floor(col_id, 630.0)
     await db_repo.upsert_model_floor(col_id, "Bank Vault", 1200.0)
@@ -58,7 +53,7 @@ async def seed_example_data(db_repo: DatabaseRepository, cache: MemoryHotCache):
 
     # Sync cache
     await cache.sync_from_db([col_id])
-    logger.info("Seeding completed successfully.")
+    logger.info("[MAIN] Seeding completed successfully.")
 
 
 async def main():
@@ -69,12 +64,11 @@ async def main():
     parser.add_argument("--mode", choices=["scanner", "buyer", "all"], default="all", help="Mode to run")
     args = parser.parse_args()
 
-    logger.info(f"Starting Gift Sniper Engine (uvloop: {uvloop_enabled}, tgcrypto: {tgcrypto_enabled})")
+    logger.info(f"[MAIN] Starting Gift Sniper Engine (uvloop: {uvloop_enabled}, tgcrypto: {tgcrypto_enabled})")
 
-    # 1. Initialize Database & Repository
+    # 1. Initialize Database Schema automatically (CREATE TABLE IF NOT EXISTS)
+    await init_db()
     db_repo = DatabaseRepository()
-    if args.init_db:
-        await init_db()
 
     # 2. Initialize Hot Cache
     cache = MemoryHotCache(db_repo)
@@ -106,7 +100,7 @@ async def main():
     )
 
     # 4. Initialize Alert Bot
-    # alert_bot = AlertChannelBot(scanner_client, settings.ALERT_CHANNEL_ID)
+    alert_bot = AlertChannelBot(scanner_client, settings.ALERT_CHANNEL_ID)
 
     # 5. Initialize Auto Buyer
     auto_buyer = AutoBuyer(
@@ -119,11 +113,11 @@ async def main():
 
     # 6. Define Deal Trigger Handler
     async def handle_deal_found(listing: GiftListing, ref_floor: float, discount_pct: float):
-        logger.info(f"🔥 DEAL SIGNAL DETECTED: {listing} | Ref Floor: {ref_floor} | Discount: {discount_pct:.1%}")
+        logger.info(f"🔥 [DEAL_SIGNAL] DETECTED: {listing} | Ref Floor: {ref_floor:.1f} | Discount: {discount_pct:.1%}")
 
         # Action A: Send Channel Alert if discount meets/exceeds ALERT_DISCOUNT_THRESHOLD (>= 25%)
         if discount_pct >= settings.ALERT_DISCOUNT_THRESHOLD:
-            logger.info(f"📢 Sending Channel Alert ({discount_pct:.1%} >= {settings.ALERT_DISCOUNT_THRESHOLD:.1%})")
+            logger.info(f"📢 [MAIN] Sending Channel Alert ({discount_pct:.1%} >= {settings.ALERT_DISCOUNT_THRESHOLD:.1%})")
             await alert_bot.send_deal_alert(
                 gift_id=listing.gift_id,
                 collectible_name=listing.collectible_name,
@@ -135,15 +129,15 @@ async def main():
                 gift_slug=listing.slug
             )
         else:
-            logger.info(f"ℹ️ Skipped Channel Alert ({discount_pct:.1%} < {settings.ALERT_DISCOUNT_THRESHOLD:.1%})")
+            logger.info(f"ℹ️ [MAIN] Skipped Channel Alert ({discount_pct:.1%} < {settings.ALERT_DISCOUNT_THRESHOLD:.1%})")
 
         # Action B: Execute Auto Snipe Buy if in buyer/all mode and discount meets/exceeds SNIPE_DISCOUNT_THRESHOLD (>= 50%)
         if discount_pct >= settings.SNIPE_DISCOUNT_THRESHOLD:
             if args.mode in ("buyer", "all"):
-                logger.info(f"⚡ Executing Auto-Snipe ({discount_pct:.1%} >= {settings.SNIPE_DISCOUNT_THRESHOLD:.1%})")
+                logger.info(f"⚡ [MAIN] Executing Auto-Snipe ({discount_pct:.1%} >= {settings.SNIPE_DISCOUNT_THRESHOLD:.1%})")
                 await auto_buyer.buy_gift(listing, ref_floor, discount_pct)
         else:
-            logger.info(f"ℹ️ Skipped Auto-Snipe ({discount_pct:.1%} < {settings.SNIPE_DISCOUNT_THRESHOLD:.1%})")
+            logger.info(f"ℹ️ [MAIN] Skipped Auto-Snipe ({discount_pct:.1%} < {settings.SNIPE_DISCOUNT_THRESHOLD:.1%})")
 
     # 7. Initialize Market Scanner
     scanner = MarketScanner(
@@ -161,18 +155,18 @@ async def main():
         await scanner_client.connect()
         await buyer_client.connect()
 
-        logger.info(f"Bot running in '{args.mode}' mode. Press Ctrl+C to stop.")
+        logger.info(f"[MAIN] Bot running in '{args.mode}' mode. Press Ctrl+C to stop.")
         await scanner.start_polling(poll_interval=settings.POLL_INTERVAL_SECONDS)
 
     except KeyboardInterrupt:
-        logger.info("Shutdown signal received.")
+        logger.info("[MAIN] Shutdown signal received.")
     finally:
         scanner.stop()
         if scanner_client.is_connected():
             await scanner_client.disconnect()
         if buyer_client.is_connected():
             await buyer_client.disconnect()
-        logger.info("Shutdown completed.")
+        logger.info("[MAIN] Shutdown completed.")
 
 
 if __name__ == "__main__":

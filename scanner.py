@@ -1,14 +1,24 @@
 """
 Low-latency MTProto Market Scanner for Telegram Stars Gifts.
-Streams live market updates, extracts gift attributes (collectible_id, model, background),
+Streams live resale market updates using GetResaleStarGiftsRequest,
+extracts gift attributes (collectible_id, model, background),
 and matches them against the floor matrix.
 """
 import asyncio
 import logging
 from typing import Optional, List, Callable, Dict, Any, Tuple
 from telethon import TelegramClient
-from telethon.tl.functions.payments import GetPaymentFormRequest
-from telethon.tl.types import InputInvoiceStarGiftResale, InputInvoiceStarGift
+from telethon.tl.functions.payments import GetStarGiftsRequest, GetResaleStarGiftsRequest
+from telethon.tl.types import StarGift, StarGiftUnique
+from telethon.errors import (
+    UserDeactivatedError,
+    UserDeactivatedBanError,
+    AuthKeyUnregisteredError,
+    SessionRevokedError,
+    AuthKeyInvalidError,
+    FloodWaitError,
+    RPCError
+)
 
 from floor_engine import MemoryHotCache, FloorEngine
 from database import DatabaseRepository
@@ -23,10 +33,10 @@ class GiftListing:
         self,
         gift_id: str,
         collectible_name: str,
-        gift_num: Optional[int],
-        model: Optional[str],
-        background: Optional[str],
-        price_stars: int,
+        gift_num: Optional[int] = None,
+        model: Optional[str] = None,
+        background: Optional[str] = None,
+        price_stars: int = 0,
         raw_attributes: Optional[Dict[str, Any]] = None,
         slug: Optional[str] = None
     ):
@@ -37,11 +47,11 @@ class GiftListing:
         self.background = background
         self.price_stars = price_stars
         self.raw_attributes = raw_attributes or {}
-        self.slug = slug or f"{collectible_name}-{gift_num or gift_id}"
+        self.slug = slug or (f"{collectible_name}-{gift_num}" if gift_num else f"{collectible_name}-{gift_id}")
 
     def __repr__(self):
         return (
-            f"<GiftListing id={self.gift_id} name={self.collectible_name} "
+            f"<GiftListing id={self.gift_id} slug={self.slug} name={self.collectible_name} "
             f"model={self.model} bg={self.background} price={self.price_stars}>"
         )
 
@@ -56,6 +66,7 @@ class MarketScanner:
         client: TelegramClient,
         cache: MemoryHotCache,
         db_repo: DatabaseRepository,
+        target_gift_ids: Optional[List[int]] = None,
         discount_threshold: float = 0.20,
         alert_discount_threshold: float = 0.25,
         snipe_discount_threshold: float = 0.50,
@@ -65,6 +76,7 @@ class MarketScanner:
         self.client = client
         self.cache = cache
         self.db_repo = db_repo
+        self.target_gift_ids = target_gift_ids or []
         self.alert_discount_threshold = alert_discount_threshold
         self.snipe_discount_threshold = snipe_discount_threshold
         self.discount_threshold = min(alert_discount_threshold, snipe_discount_threshold)
@@ -75,7 +87,7 @@ class MarketScanner:
     def parse_attributes(self, attributes: List[Any]) -> Tuple[Optional[str], Optional[str]]:
         """
         Parses attributes from Telegram Star Gift MTProto structures.
-        Extracts model name and background name.
+        Extracts model name and background (backdrop) name.
         """
         model = None
         background = None
@@ -87,9 +99,11 @@ class MarketScanner:
             attr_type = getattr(attr, '__class__', None)
             type_name = attr_type.__name__ if attr_type else ""
 
-            if "Model" in type_name or hasattr(attr, "model") or hasattr(attr, "name"):
+            # Extract Model Name
+            if "Model" in type_name or hasattr(attr, "model"):
                 model = getattr(attr, "name", None) or getattr(attr, "model", None)
-            elif "Backdrop" in type_name or "Background" in type_name or hasattr(attr, "backdrop") or hasattr(attr, "center_color"):
+            # Extract Backdrop / Background Name
+            if "Backdrop" in type_name or "Background" in type_name or hasattr(attr, "backdrop") or hasattr(attr, "center_color"):
                 background = getattr(attr, "name", None) or getattr(attr, "center_color", None)
 
             if isinstance(attr, dict):
@@ -102,38 +116,73 @@ class MarketScanner:
 
     async def fetch_resale_listings(self) -> List[GiftListing]:
         """
-        Retrieves active resale gift listings using MTProto function calls.
-        Fallbacks gracefully if connected session is offline or during testing.
+        Retrieves active resale gift listings using MTProto GetResaleStarGiftsRequest.
+        Handles account ban/deactivation and FloodWait exceptions safely.
         """
         listings: List[GiftListing] = []
         if not self.client or not self.client.is_connected():
+            logger.debug("[SCANNER] Client disconnected or not available for fetching resale listings.")
             return listings
 
-        try:
-            # Query MTProto payments API for active Star Gifts
-            from telethon.tl.functions.payments import GetStarGiftsRequest
-            res = await self.client(GetStarGiftsRequest())
-            raw_gifts = getattr(res, "gifts", [])
+        # If target gift IDs not set, fetch catalog first to discover base gift IDs
+        gift_ids_to_scan = self.target_gift_ids
+        if not gift_ids_to_scan:
+            try:
+                catalog_res = await self.client(GetStarGiftsRequest(hash=0))
+                catalog_gifts = getattr(catalog_res, "gifts", [])
+                gift_ids_to_scan = [getattr(g, "id", None) for g in catalog_gifts if getattr(g, "id", None)]
+            except (UserDeactivatedError, UserDeactivatedBanError, AuthKeyUnregisteredError, SessionRevokedError, AuthKeyInvalidError) as acc_err:
+                logger.critical(f"[ACCOUNT_STATUS] 🛑 CRITICAL: Scanner account error/ban detected: {acc_err}")
+                self.stop()
+                return listings
+            except Exception as e:
+                logger.warning(f"[SCANNER] Failed to fetch catalog base gifts: {e}")
+                return listings
 
-            for g in raw_gifts:
-                gift_id = str(getattr(g, "id", ""))
-                price = getattr(g, "stars", 0)
-                attrs = getattr(g, "attributes", [])
-                model, bg = self.parse_attributes(attrs)
-                title = getattr(g, "title", "MoodPack")
+        for base_gift_id in gift_ids_to_scan:
+            try:
+                resale_res = await self.client(GetResaleStarGiftsRequest(
+                    gift_id=base_gift_id,
+                    sort_by_price=True,
+                    stars_only=True,
+                    attributes_hash=0,
+                    offset="",
+                    limit=50
+                ))
+                raw_gifts = getattr(resale_res, "gifts", [])
+                logger.info(f"[SCANNER] Fetched {len(raw_gifts)} resale listings for base gift_id={base_gift_id}")
 
-                listing = GiftListing(
-                    gift_id=gift_id,
-                    collectible_name=title,
-                    gift_num=getattr(g, "num", None),
-                    model=model,
-                    background=bg,
-                    price_stars=price
-                )
-                listings.append(listing)
+                for g in raw_gifts:
+                    gift_id = str(getattr(g, "id", ""))
+                    price = getattr(g, "stars", 0)
+                    attrs = getattr(g, "attributes", [])
+                    model, bg = self.parse_attributes(attrs)
+                    title = getattr(g, "title", f"Gift_{base_gift_id}")
+                    gift_num = getattr(g, "num", None)
+                    slug = getattr(g, "slug", None) or (f"{title}-{gift_num}" if gift_num else f"{title}-{gift_id}")
 
-        except Exception as e:
-            logger.debug(f"MTProto market fetch iteration message: {e}")
+                    listing = GiftListing(
+                        gift_id=gift_id,
+                        collectible_name=title,
+                        gift_num=gift_num,
+                        model=model,
+                        background=bg,
+                        price_stars=price,
+                        slug=slug
+                    )
+                    listings.append(listing)
+
+            except FloodWaitError as wait_err:
+                logger.warning(f"[FLOOD_WAIT] [SCANNER] Rate limited for {wait_err.seconds}s on base gift_id={base_gift_id}")
+                await asyncio.sleep(wait_err.seconds + 1)
+            except (UserDeactivatedError, UserDeactivatedBanError, AuthKeyUnregisteredError, SessionRevokedError, AuthKeyInvalidError) as acc_err:
+                logger.critical(f"[ACCOUNT_STATUS] 🛑 CRITICAL: Scanner account error/ban detected: {acc_err}")
+                self.stop()
+                break
+            except RPCError as rpc_err:
+                logger.error(f"[SCANNER] RPC Error on gift_id={base_gift_id}: {getattr(rpc_err, 'message', str(rpc_err))}")
+            except Exception as e:
+                logger.warning(f"[SCANNER] Error fetching resale gifts for {base_gift_id}: {e}")
 
         return listings
 
@@ -143,6 +192,7 @@ class MarketScanner:
         and evaluates each listing for deal triggers.
         """
         if not listings:
+            logger.debug("[SCANNER] No resale listings retrieved in this iteration.")
             return
 
         collectibles_map: Dict[str, List[GiftListing]] = {}
@@ -175,8 +225,8 @@ class MarketScanner:
         )
 
         logger.info(
-            f"Evaluated {listing.slug} | Price: {listing.price_stars} | Ref Floor: {ref_floor} | "
-            f"Discount: {discount_pct:.1%} | Signal Triggered: {is_buy_signal}"
+            f"[EVALUATION] {listing.slug} | Price: {listing.price_stars} Stars | Ref Floor: {ref_floor:.1f} | "
+            f"Discount: {discount_pct:.1%} | Buy Signal: {is_buy_signal} | Reason: {reason}"
         )
 
         if is_buy_signal and self.on_deal_found_callback:
@@ -189,7 +239,7 @@ class MarketScanner:
         Starts the non-blocking polling loop for market updates via MTProto.
         """
         self.is_running = True
-        logger.info("Market Scanner started polling...")
+        logger.info("[SCANNER] Market Scanner started polling...")
 
         while self.is_running:
             try:
@@ -200,9 +250,9 @@ class MarketScanner:
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                logger.error(f"Error in scanner polling loop: {e}")
+                logger.error(f"[SCANNER] Error in scanner polling loop: {e}")
                 await asyncio.sleep(2.0)
 
     def stop(self):
         self.is_running = False
-        logger.info("Market Scanner stopped.")
+        logger.info("[SCANNER] Market Scanner stopped.")
