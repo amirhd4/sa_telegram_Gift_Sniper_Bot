@@ -65,6 +65,7 @@ async def main():
     parser = argparse.ArgumentParser(description="Telegram Stars Gift Sniper & Floor Analyzer")
     parser.add_argument("--init-db", action="store_true", help="Initialize database tables")
     parser.add_argument("--seed", action="store_true", help="Seed initial floor price data")
+    parser.add_argument("--proxy", action="store_true", help="Use proxy")
     parser.add_argument("--mode", choices=["scanner", "buyer", "all"], default="all", help="Mode to run")
     args = parser.parse_args()
 
@@ -84,11 +85,28 @@ async def main():
         await cache.sync_from_db(["MoodPack", "BowTie"])
 
     # 3. Create MTProto Telegram Clients (Isolated Scanner vs Buyer sessions)
-    scanner_client = TelegramClient(settings.SCANNER_SESSION, settings.API_ID, settings.API_HASH)
-    buyer_client = TelegramClient(settings.BUYER_SESSION, settings.API_ID, settings.API_HASH)
+    proxy = {
+        "proxy_type": "http",
+        "addr": "127.0.0.1",
+        "port": 10808,
+    } if args.proxy else None
+
+    scanner_client = TelegramClient(
+        settings.SCANNER_SESSION,
+        settings.API_ID,
+        settings.API_HASH,
+        proxy=proxy
+    )
+
+    buyer_client = TelegramClient(
+        settings.BUYER_SESSION,
+        settings.API_ID,
+        settings.API_HASH,
+        proxy=proxy
+    )
 
     # 4. Initialize Alert Bot
-    alert_bot = AlertChannelBot(scanner_client, settings.ALERT_CHANNEL_ID)
+    # alert_bot = AlertChannelBot(scanner_client, settings.ALERT_CHANNEL_ID)
 
     # 5. Initialize Auto Buyer
     auto_buyer = AutoBuyer(
