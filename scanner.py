@@ -5,11 +5,11 @@ extracts gift attributes (collectible_id, model, background),
 and matches them against the floor matrix.
 """
 import asyncio
+import time
 import logging
 from typing import Optional, List, Callable, Dict, Any, Tuple
 from telethon import TelegramClient
 from telethon.tl.functions.payments import GetStarGiftsRequest, GetResaleStarGiftsRequest
-from telethon.tl.types import StarGift, StarGiftUnique
 from telethon.errors import (
     UserDeactivatedError,
     UserDeactivatedBanError,
@@ -71,7 +71,10 @@ class MarketScanner:
         alert_discount_threshold: float = 0.25,
         snipe_discount_threshold: float = 0.50,
         max_stars_cap: Optional[int] = None,
-        on_deal_found_callback: Optional[Callable] = None
+        on_deal_found_callback: Optional[Callable] = None,
+        catalog_refresh_interval: float = 600.0,
+        request_timeout: float = 15.0,
+        heartbeat_interval: float = 30.0
     ):
         self.client = client
         self.cache = cache
@@ -82,7 +85,15 @@ class MarketScanner:
         self.discount_threshold = min(alert_discount_threshold, snipe_discount_threshold)
         self.max_stars_cap = max_stars_cap
         self.on_deal_found_callback = on_deal_found_callback
+        self.catalog_refresh_interval = catalog_refresh_interval
+        self.request_timeout = request_timeout
+        self.heartbeat_interval = heartbeat_interval
+
         self.is_running = False
+        self._discovered_gift_ids: List[int] = []
+        self._last_catalog_fetch_time: float = 0.0
+        self._cycle_count: int = 0
+        self._last_heartbeat_time: float = 0.0
 
     def parse_attributes(self, attributes: List[Any]) -> Tuple[Optional[str], Optional[str]]:
         """
@@ -114,43 +125,83 @@ class MarketScanner:
 
         return model, background
 
+    async def fetch_catalog_gift_ids(self) -> List[int]:
+        """
+        Fetches or returns cached base gift IDs from the catalog.
+        Refreshes catalog periodically every `catalog_refresh_interval` seconds.
+        """
+        if self.target_gift_ids:
+            return self.target_gift_ids
+
+        now = time.time()
+        if self._discovered_gift_ids and (now - self._last_catalog_fetch_time < self.catalog_refresh_interval):
+            return self._discovered_gift_ids
+
+        if not self.client or not self.client.is_connected():
+            logger.debug("[SCANNER] Client disconnected, cannot fetch base catalog.")
+            return self._discovered_gift_ids
+
+        try:
+            logger.info("[SCANNER] 🔄 Querying Telegram base gifts catalog (GetStarGiftsRequest)...")
+            catalog_res = await asyncio.wait_for(
+                self.client(GetStarGiftsRequest(hash=0)),
+                timeout=self.request_timeout
+            )
+            catalog_gifts = getattr(catalog_res, "gifts", [])
+            discovered = [getattr(g, "id", None) for g in catalog_gifts if getattr(g, "id", None) is not None]
+
+            if discovered:
+                self._discovered_gift_ids = discovered
+                self._last_catalog_fetch_time = now
+                logger.info(f"[SCANNER] 📋 Catalog discovery complete: Found {len(discovered)} base gift IDs to scan: {discovered}")
+            else:
+                logger.warning("[SCANNER] ⚠️ GetStarGiftsRequest returned 0 gifts. Retaining previous cached gift IDs if any.")
+
+        except asyncio.TimeoutError:
+            logger.warning(f"[SCANNER] ⏱ Timeout ({self.request_timeout}s) fetching catalog base gifts.")
+        except (UserDeactivatedError, UserDeactivatedBanError, AuthKeyUnregisteredError, SessionRevokedError, AuthKeyInvalidError) as acc_err:
+            logger.critical(f"[ACCOUNT_STATUS] 🛑 CRITICAL: Scanner account error/ban detected during catalog fetch: {acc_err}")
+            self.stop()
+        except FloodWaitError as wait_err:
+            logger.warning(f"[FLOOD_WAIT] [SCANNER] Rate limited for {wait_err.seconds}s on GetStarGiftsRequest")
+            await asyncio.sleep(wait_err.seconds + 1)
+        except RPCError as rpc_err:
+            logger.error(f"[SCANNER] RPC Error fetching catalog gifts: {getattr(rpc_err, 'message', str(rpc_err))}")
+        except Exception as e:
+            logger.warning(f"[SCANNER] Failed to fetch catalog base gifts: {e}")
+
+        return self._discovered_gift_ids
+
     async def fetch_resale_listings(self) -> List[GiftListing]:
         """
         Retrieves active resale gift listings using MTProto GetResaleStarGiftsRequest.
-        Handles account ban/deactivation and FloodWait exceptions safely.
+        Handles account ban/deactivation, timeouts, and FloodWait exceptions safely.
         """
         listings: List[GiftListing] = []
         if not self.client or not self.client.is_connected():
             logger.debug("[SCANNER] Client disconnected or not available for fetching resale listings.")
             return listings
 
-        # If target gift IDs not set, fetch catalog first to discover base gift IDs
-        gift_ids_to_scan = self.target_gift_ids
+        gift_ids_to_scan = await self.fetch_catalog_gift_ids()
         if not gift_ids_to_scan:
-            try:
-                catalog_res = await self.client(GetStarGiftsRequest(hash=0))
-                catalog_gifts = getattr(catalog_res, "gifts", [])
-                gift_ids_to_scan = [getattr(g, "id", None) for g in catalog_gifts if getattr(g, "id", None)]
-            except (UserDeactivatedError, UserDeactivatedBanError, AuthKeyUnregisteredError, SessionRevokedError, AuthKeyInvalidError) as acc_err:
-                logger.critical(f"[ACCOUNT_STATUS] 🛑 CRITICAL: Scanner account error/ban detected: {acc_err}")
-                self.stop()
-                return listings
-            except Exception as e:
-                logger.warning(f"[SCANNER] Failed to fetch catalog base gifts: {e}")
-                return listings
+            logger.warning("[SCANNER] ⚠️ No base gift IDs available to scan. Skipping scan iteration.")
+            return listings
 
         for base_gift_id in gift_ids_to_scan:
             try:
-                resale_res = await self.client(GetResaleStarGiftsRequest(
-                    gift_id=base_gift_id,
-                    sort_by_price=True,
-                    stars_only=True,
-                    attributes_hash=0,
-                    offset="",
-                    limit=50
-                ))
+                resale_res = await asyncio.wait_for(
+                    self.client(GetResaleStarGiftsRequest(
+                        gift_id=base_gift_id,
+                        sort_by_price=True,
+                        stars_only=True,
+                        attributes_hash=0,
+                        offset="",
+                        limit=50
+                    )),
+                    timeout=self.request_timeout
+                )
                 raw_gifts = getattr(resale_res, "gifts", [])
-                logger.info(f"[SCANNER] Fetched {len(raw_gifts)} resale listings for base gift_id={base_gift_id}")
+                logger.debug(f"[SCANNER] Fetched {len(raw_gifts)} resale listings for base gift_id={base_gift_id}")
 
                 for g in raw_gifts:
                     gift_id = str(getattr(g, "id", ""))
@@ -172,6 +223,8 @@ class MarketScanner:
                     )
                     listings.append(listing)
 
+            except asyncio.TimeoutError:
+                logger.warning(f"[SCANNER] ⏱ Timeout ({self.request_timeout}s) fetching resale gifts for base gift_id={base_gift_id}")
             except FloodWaitError as wait_err:
                 logger.warning(f"[FLOOD_WAIT] [SCANNER] Rate limited for {wait_err.seconds}s on base gift_id={base_gift_id}")
                 await asyncio.sleep(wait_err.seconds + 1)
@@ -192,7 +245,6 @@ class MarketScanner:
         and evaluates each listing for deal triggers.
         """
         if not listings:
-            logger.debug("[SCANNER] No resale listings retrieved in this iteration.")
             return
 
         collectibles_map: Dict[str, List[GiftListing]] = {}
@@ -237,14 +289,38 @@ class MarketScanner:
     async def start_polling(self, poll_interval: float = 1.0):
         """
         Starts the non-blocking polling loop for market updates via MTProto.
+        Logs cycle progress and heartbeat status at INFO level.
         """
         self.is_running = True
-        logger.info("[SCANNER] Market Scanner started polling...")
+        self._cycle_count = 0
+        self._last_heartbeat_time = time.time()
+        logger.info("[SCANNER] 🚀 Market Scanner started polling...")
+
+        # Initial catalog fetch
+        gift_ids = await self.fetch_catalog_gift_ids()
+        logger.info(f"[SCANNER] 🔍 Monitoring {len(gift_ids)} base gift IDs (Poll Interval: {poll_interval}s)")
 
         while self.is_running:
             try:
+                self._cycle_count += 1
                 listings = await self.fetch_resale_listings()
                 await self.process_listings(listings)
+
+                now = time.time()
+                # Log cycle status at INFO level on every iteration or heartbeat
+                if listings:
+                    logger.info(
+                        f"[SCANNER] [Cycle #{self._cycle_count}] Scanned market: "
+                        f"{len(listings)} active resale listings retrieved."
+                    )
+                elif (now - self._last_heartbeat_time >= self.heartbeat_interval) or (self._cycle_count == 1):
+                    monitored_count = len(self.target_gift_ids or self._discovered_gift_ids)
+                    logger.info(
+                        f"[SCANNER] [HEARTBEAT] Market Scanner active | "
+                        f"Cycle #{self._cycle_count} | Monitored Gifts: {monitored_count} | "
+                        f"Retrieved: {len(listings)} listings | Hot Cache Collectibles: {len(self.cache._cache)}"
+                    )
+                    self._last_heartbeat_time = now
 
                 await asyncio.sleep(poll_interval)
             except asyncio.CancelledError:

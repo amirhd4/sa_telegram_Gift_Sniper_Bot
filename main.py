@@ -437,14 +437,32 @@ async def main():
     # 9. Market Scanner
     # ---------------------------------------------------------
 
+    target_gift_ids = None
+    if settings.TARGET_GIFT_IDS:
+        try:
+            target_gift_ids = [
+                int(x.strip())
+                for x in settings.TARGET_GIFT_IDS.split(",")
+                if x.strip().isdigit()
+            ]
+            logger.info(
+                f"[MAIN] Configured static target gift IDs: {target_gift_ids}"
+            )
+        except Exception as e:
+            logger.warning(
+                f"[MAIN] Failed to parse TARGET_GIFT_IDS from config: {e}"
+            )
+
     scanner = MarketScanner(
         client=scanner_client,
         cache=cache,
         db_repo=db_repo,
+        target_gift_ids=target_gift_ids,
         alert_discount_threshold=settings.ALERT_DISCOUNT_THRESHOLD,
         snipe_discount_threshold=settings.SNIPE_DISCOUNT_THRESHOLD,
         max_stars_cap=settings.MAX_STARS_PER_GIFT,
         on_deal_found_callback=handle_deal_found,
+        catalog_refresh_interval=settings.CATALOG_REFRESH_INTERVAL,
     )
 
     # ---------------------------------------------------------
