@@ -100,7 +100,7 @@ class MemoryHotCache:
                 "models": data.get("model_floors", {}),
                 "backgrounds": data.get("bg_floors", {})
             }
-        logger.info(f"Hot Cache updated for {len(collectible_ids)} collectibles.")
+        logger.debug(f"Hot Cache updated for {len(collectible_ids)} collectibles.")
 
     def set_floors(
         self,

@@ -572,7 +572,7 @@ class MarketScanner:
 
         try:
 
-            logger.info(
+            logger.debug(
                 "[SCANNER] Refreshing Telegram Gift catalog..."
             )
 
@@ -585,21 +585,6 @@ class MarketScanner:
                 timeout=self.request_timeout,
             )
 
-            logger.info(
-                "[DEBUG] StarGifts result type=%s",
-                type(result).__name__,
-            )
-
-            logger.info(
-                "[DEBUG] StarGifts result=%r",
-                result,
-            )
-
-            logger.info(
-                "[DEBUG] StarGifts gifts=%r",
-                getattr(result, "gifts", None),
-            )
-
             gifts = (
                 getattr(
                     result,
@@ -609,7 +594,7 @@ class MarketScanner:
                 or []
             )
 
-            logger.info(
+            logger.debug(
                 "[SCANNER] Catalog response type=%s | gifts=%d",
                 type(result).__name__,
                 len(gifts),
@@ -619,7 +604,12 @@ class MarketScanner:
 
             for gift in gifts:
 
-                gift_id = getattr(gift, "id", None)
+                raw_gift_id = getattr(gift, "gift_id", None)
+                if isinstance(raw_gift_id, int):
+                    gift_id = raw_gift_id
+                else:
+                    raw_id = getattr(gift, "id", None)
+                    gift_id = raw_id if isinstance(raw_id, int) else None
 
                 if not isinstance(gift_id, int):
                     continue
@@ -1402,22 +1392,25 @@ class MarketScanner:
             max_stars_cap=self.max_stars_cap,
         )
 
-        logger.info(
-            "[EVALUATION] %s | "
-            "BaseGift=%s | "
-            "Price=%s | "
-            "Floor=%.1f | "
-            "Discount=%.2f%% | "
-            "Signal=%s | "
-            "Reason=%s",
-            listing.slug,
-            listing.base_gift_id,
-            listing.price_stars,
-            ref_floor,
-            discount_pct * 100,
-            is_buy_signal,
-            reason,
-        )
+        if is_buy_signal:
+            logger.info(
+                "[EVALUATION] DEAL DETECTED: %s | BaseGift=%s | Price=%s | Floor=%.1f | Discount=%.2f%%",
+                listing.slug,
+                listing.base_gift_id,
+                listing.price_stars,
+                ref_floor,
+                discount_pct * 100,
+            )
+        else:
+            logger.debug(
+                "[EVALUATION] %s | BaseGift=%s | Price=%s | Floor=%.1f | Discount=%.2f%% | Signal=False | Reason=%s",
+                listing.slug,
+                listing.base_gift_id,
+                listing.price_stars,
+                ref_floor,
+                discount_pct * 100,
+                reason,
+            )
 
         # ====================================================
         # CALLBACK
@@ -1560,7 +1553,7 @@ class MarketScanner:
 
                 if listings:
 
-                    logger.info(
+                    logger.debug(
                         "[SCANNER] Cycle #%d | "
                         "GiftTypes=%d | "
                         "Listings=%d | "
@@ -1577,7 +1570,7 @@ class MarketScanner:
                     >= self.heartbeat_interval
                 ):
 
-                    logger.info(
+                    logger.debug(
                         "[SCANNER] Heartbeat | "
                         "Cycle #%d | "
                         "Gifts=%d | "
