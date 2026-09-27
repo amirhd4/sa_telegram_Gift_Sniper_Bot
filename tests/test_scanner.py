@@ -128,3 +128,49 @@ async def test_scanner_timeout_handling():
 
     listings = await scanner.fetch_resale_listings()
     assert listings == []
+
+
+@pytest.mark.asyncio
+async def test_scanner_empty_catalog_retry_and_unique_gifts():
+    client_mock = AsyncMock()
+    client_mock.is_connected = MagicMock(return_value=True)
+
+    # First call returns empty gifts
+    empty_res = MagicMock()
+    empty_res.gifts = []
+
+    # Second call returns StarGift (id) and StarGiftUnique (gift_id)
+    gift1 = MagicMock()
+    gift1.gift_id = None
+    gift1.id = 101
+
+    gift2 = MagicMock()
+    gift2.gift_id = 202
+    gift2.id = 99999
+
+    valid_res = MagicMock()
+    valid_res.gifts = [gift1, gift2]
+
+    client_mock.side_effect = [empty_res, valid_res]
+
+    scanner = MarketScanner(
+        client=client_mock,
+        cache=MemoryHotCache(),
+        db_repo=AsyncMock(),
+        catalog_refresh_interval=600.0
+    )
+    scanner.catalog_retry_interval = 0.01  # Short interval for testing
+
+    # 1. First fetch returns []
+    ids_1 = await scanner.fetch_catalog_gift_ids()
+    assert ids_1 == []
+    assert client_mock.call_count == 1
+
+    # Wait brief moment for retry interval
+    import asyncio
+    await asyncio.sleep(0.02)
+
+    # 2. Second fetch retries (since discovered was empty) and gets [101, 202]
+    ids_2 = await scanner.fetch_catalog_gift_ids()
+    assert ids_2 == [101, 202]
+    assert client_mock.call_count == 2
