@@ -73,3 +73,58 @@ async def test_scanner_fetch_resale_listings():
     assert item.model == "Star Pulip"
     assert item.background == "Black"
     assert item.slug == "MoodPack-182609"
+
+
+@pytest.mark.asyncio
+async def test_scanner_catalog_caching_and_refresh():
+    client_mock = AsyncMock()
+    client_mock.is_connected = MagicMock(return_value=True)
+
+    # Mock catalog gift response
+    mock_base_gift = MagicMock()
+    mock_base_gift.id = 999
+
+    mock_catalog_res = MagicMock()
+    mock_catalog_res.gifts = [mock_base_gift]
+
+    client_mock.side_effect = [mock_catalog_res]
+
+    scanner = MarketScanner(
+        client=client_mock,
+        cache=MemoryHotCache(),
+        db_repo=AsyncMock(),
+        catalog_refresh_interval=600.0
+    )
+
+    # First call should invoke MTProto call
+    ids_1 = await scanner.fetch_catalog_gift_ids()
+    assert ids_1 == [999]
+    assert client_mock.call_count == 1
+
+    # Second immediate call should return cached result without MTProto call
+    ids_2 = await scanner.fetch_catalog_gift_ids()
+    assert ids_2 == [999]
+    assert client_mock.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_scanner_timeout_handling():
+    client_mock = AsyncMock()
+    client_mock.is_connected = MagicMock(return_value=True)
+
+    import asyncio
+    async def slow_call(*args, **kwargs):
+        await asyncio.sleep(2.0)
+
+    client_mock.side_effect = slow_call
+
+    scanner = MarketScanner(
+        client=client_mock,
+        cache=MemoryHotCache(),
+        db_repo=AsyncMock(),
+        target_gift_ids=[123],
+        request_timeout=0.1
+    )
+
+    listings = await scanner.fetch_resale_listings()
+    assert listings == []

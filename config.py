@@ -36,6 +36,8 @@ class Settings(BaseSettings):
     # Database & Storage
     DATABASE_URL: str = "sqlite+aiosqlite:///gift_sniper.db"
     POLL_INTERVAL_SECONDS: float = 1.0 # Scanner interval in seconds
+    TARGET_GIFT_IDS: Optional[str] = None # Optional comma-separated gift IDs, e.g., "101,102"
+    CATALOG_REFRESH_INTERVAL: float = 600.0 # Base catalog refresh interval in seconds (default 10 mins)
 
 
 settings = Settings()
