@@ -341,9 +341,33 @@ class MarketScanner:
                 "[SCANNER] Failed loading persisted Gift IDs"
             )
 
+        # ----------------------------------------------------
+        # Default seed for app if file does not exist
+        # ----------------------------------------------------
+
+        if (
+            not self._gift_ids_file.exists()
+            and str(self._gift_ids_file) == "data/gift_ids.json"
+            and not ids
+        ):
+
+            default_seeds = [512, 513, 514, 515, 516]
+
+            for seed in default_seeds:
+
+                ids.add(seed)
+
         self._discovered_gift_ids = sorted(
             ids
         )
+
+        if (
+            not self._gift_ids_file.exists()
+            and str(self._gift_ids_file) == "data/gift_ids.json"
+            and self._discovered_gift_ids
+        ):
+
+            self._persist_gift_ids()
 
         if self._discovered_gift_ids:
 
@@ -400,6 +424,15 @@ class MarketScanner:
             return None, None
 
         for attr in attributes:
+
+            if isinstance(attr, dict):
+                attr_type = str(attr.get("type", "")).lower()
+                attr_name = attr.get("name")
+                if attr_type == "model" or "model" in attr_type:
+                    model = attr_name or model
+                elif attr_type in ("backdrop", "background") or "backdrop" in attr_type or "background" in attr_type:
+                    background = attr_name or background
+                continue
 
             type_name = type(
                 attr
@@ -574,11 +607,12 @@ class MarketScanner:
 
             for gift in gifts:
 
-                gift_id = getattr(
-                    gift,
-                    "id",
-                    None,
-                )
+                raw_gift_id = getattr(gift, "gift_id", None)
+                if isinstance(raw_gift_id, int):
+                    gift_id = raw_gift_id
+                else:
+                    raw_id = getattr(gift, "id", None)
+                    gift_id = raw_id if isinstance(raw_id, int) else None
 
                 if isinstance(
                     gift_id,

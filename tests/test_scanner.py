@@ -76,7 +76,7 @@ async def test_scanner_fetch_resale_listings():
 
 
 @pytest.mark.asyncio
-async def test_scanner_catalog_caching_and_refresh():
+async def test_scanner_catalog_caching_and_refresh(tmp_path):
     client_mock = AsyncMock()
     client_mock.is_connected = MagicMock(return_value=True)
 
@@ -93,7 +93,8 @@ async def test_scanner_catalog_caching_and_refresh():
         client=client_mock,
         cache=MemoryHotCache(),
         db_repo=AsyncMock(),
-        catalog_refresh_interval=600.0
+        catalog_refresh_interval=600.0,
+        gift_ids_file=str(tmp_path / "gift_ids.json")
     )
 
     # First call should invoke MTProto call
@@ -131,7 +132,7 @@ async def test_scanner_timeout_handling():
 
 
 @pytest.mark.asyncio
-async def test_scanner_empty_catalog_retry_and_unique_gifts():
+async def test_scanner_empty_catalog_retry_and_unique_gifts(tmp_path):
     client_mock = AsyncMock()
     client_mock.is_connected = MagicMock(return_value=True)
 
@@ -157,7 +158,8 @@ async def test_scanner_empty_catalog_retry_and_unique_gifts():
         client=client_mock,
         cache=MemoryHotCache(),
         db_repo=AsyncMock(),
-        catalog_refresh_interval=600.0
+        catalog_refresh_interval=600.0,
+        gift_ids_file=str(tmp_path / "gift_ids.json")
     )
     scanner.catalog_retry_interval = 0.01  # Short interval for testing
 
