@@ -351,11 +351,8 @@ class MarketScanner:
             and not ids
         ):
 
-            default_seeds = [512, 513, 514, 515, 516]
+            default_seeds = []
 
-            for seed in default_seeds:
-
-                ids.add(seed)
 
         self._discovered_gift_ids = sorted(
             ids
@@ -588,6 +585,21 @@ class MarketScanner:
                 timeout=self.request_timeout,
             )
 
+            logger.info(
+                "[DEBUG] StarGifts result type=%s",
+                type(result).__name__,
+            )
+
+            logger.info(
+                "[DEBUG] StarGifts result=%r",
+                result,
+            )
+
+            logger.info(
+                "[DEBUG] StarGifts gifts=%r",
+                getattr(result, "gifts", None),
+            )
+
             gifts = (
                 getattr(
                     result,
@@ -607,12 +619,10 @@ class MarketScanner:
 
             for gift in gifts:
 
-                raw_gift_id = getattr(gift, "gift_id", None)
-                if isinstance(raw_gift_id, int):
-                    gift_id = raw_gift_id
-                else:
-                    raw_id = getattr(gift, "id", None)
-                    gift_id = raw_id if isinstance(raw_id, int) else None
+                gift_id = getattr(gift, "id", None)
+
+                if not isinstance(gift_id, int):
+                    continue
 
                 if isinstance(
                     gift_id,

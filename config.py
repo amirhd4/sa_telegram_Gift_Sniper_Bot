@@ -14,8 +14,8 @@ class Settings(BaseSettings):
     )
 
     # Telegram API Credentials
-    API_ID: int = 123456
-    API_HASH: str = "your_api_hash_here"
+    API_ID: int
+    API_HASH: str
 
     # MTProto Sessions (Separate scanner & buyer to prevent rate limits/floodwait)
     SCANNER_SESSION: str = "scanner_session"
