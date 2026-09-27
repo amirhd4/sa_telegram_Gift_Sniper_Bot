@@ -393,7 +393,7 @@ async def main():
 
         else:
 
-            logger.info(
+            logger.debug(
                 "ℹ️ [MAIN] Skipped Channel Alert "
                 "(%.1f%% < %.1f%%)",
                 discount_pct * 100,
@@ -426,7 +426,7 @@ async def main():
 
         else:
 
-            logger.info(
+            logger.debug(
                 "ℹ️ [MAIN] Skipped Auto-Snipe "
                 "(%.1f%% < %.1f%%)",
                 discount_pct * 100,
